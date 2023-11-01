@@ -1,0 +1,120 @@
+extern crate serde;
+extern crate serde_json;
+extern crate reqwest;
+
+use std::fs::OpenOptions;
+use std::io::Write;
+
+use serde::{Serialize, Deserialize};
+use std::collections::HashMap;
+
+#[derive(Serialize, Deserialize, Debug)]
+struct TermPeriod {
+    years: u8,
+    months: u8,
+    days: u8,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct LoanItem {
+    loan_id: u64,
+    issue_date: String,
+    interest_rate_percent: u8,
+    principal_issued: u16,
+    principal_offer: u16,
+    principal_outstanding: u16,
+    currency_code: String,
+    currency_symbol: String,
+    total_payments: u8,
+    open_payments: u8,
+    closed_payments: u8,
+    maturity_date: String,
+    next_payment_date: String,
+    term_in_days: u16,
+    term_period: TermPeriod,
+    originator_company_name: String,
+    originator_id: u64,
+    product_code: String,
+    product_label: String,
+    country_code: String,
+    has_buyback: bool,
+    extensions: u8,
+    extended_for_days: u16,
+    my_investments: u8,
+    my_investments_percent: u8,
+    funded_percent: u8,
+    amount_funded: u16,
+    amount_available: u16,
+    available_percent: u8,
+    payment_schedule: Option<HashMap<String, String>>,
+    loan_events: Option<HashMap<String, String>>,
+    loan_status: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Response {
+    total: u8,
+    items: Vec<LoanItem>,
+}
+
+#[derive(Serialize, Debug)]
+struct Filter {
+    products: Vec<String>,
+    countries: Vec<String>,
+    originators: Vec<String>,
+    principal_offer_from: String,
+    currency_code: String,
+}
+
+#[derive(Serialize, Debug)]
+struct RequestBody {
+    page: u8,
+    page_size: u8,
+    filter: Filter,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
+    
+    let request_body = RequestBody {
+        page: 1,
+        page_size: 20,
+        filter: Filter {
+            products: vec![],
+            countries: vec![],
+            originators: vec![],
+            principal_offer_from: "10".to_string(),
+            currency_code: "EUR".to_string(),
+        },
+    };
+
+    let response = client.post("https://example.com/api/loans")
+        .header("Cookie", "your-cookie-here")
+        .json(&request_body)
+        .send()
+        .await?;
+
+        if !response.status().is_success() {
+        eprintln!("Error: Received non-success status code {:?}", response.status());
+        eprintln!("Headers: {:#?}", response.headers());
+        let text = response.text().await?;
+        eprintln!("Response body: {}", text);
+        return Err("Non-success status code".into());
+    }
+
+    let parsed_response = response.json::<Response>().await?;
+
+    let response_json = serde_json::to_string_pretty(&parsed_response)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .append(true)
+        .create(true)
+        .open("response.json")?;
+    
+    writeln!(file, "{}", response_json)?;
+
+    println!("Response appended to response.json");
+
+    Ok(())
+}

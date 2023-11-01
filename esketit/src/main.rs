@@ -1,0 +1,172 @@
+extern crate reqwest;
+extern crate serde;
+// extern crate serde_derive;
+extern crate toml;
+
+use reqwest::Client;
+// use serde_derive::{Deserialize, Serialize};
+use std::fs;
+
+#[derive(serde::Deserialize)]
+struct Config {
+    username: String,
+    password: String,
+    max_term_period: u32,
+    min_interest_rate: f32,
+}
+
+#[derive(serde::Serialize)]
+struct LoginRequest {
+    email: String,
+    password: String,
+    // ... other fields ...
+}
+
+#[derive(serde::Deserialize)]
+struct LoginResponse {
+    investor_number: String,
+    // ... other fields ...
+}
+
+#[derive(serde::Serialize)]
+struct TwoFactorAuthRequest {
+    totp: String,
+}
+
+#[derive(serde::Serialize)]
+struct AccountInfoRequest {
+    currency_code: String,
+}
+
+#[derive(serde::Deserialize)]
+struct AccountInfoResponse {
+    cash_balance: f32,
+    // ... other fields ...
+}
+
+#[derive(serde::Serialize)]
+struct QueryInvestmentsRequest {
+    page: u32,
+    page_size: u32,
+    // filter: Filter,
+}
+
+#[derive(serde::Serialize)]
+struct Filter {
+    principal_offer_from: String,
+    currency_code: String,
+}
+
+#[derive(serde::Deserialize)]
+struct QueryInvestmentsResponse {
+    items: Vec<Loan>,
+}
+
+#[derive(serde::Deserialize)]
+struct Loan {
+    loan_id: u64,
+    interest_rate_percent: f32,
+    // ... other fields ...
+}
+
+#[derive(serde::Serialize)]
+struct InvestmentRequest {
+    loan_id: u64,
+    amount: f32,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), reqwest::Error> {
+    // Load and parse config
+    let config_contents = fs::read_to_string("config.toml").unwrap();
+    let config: Config = toml::from_str(&config_contents).unwrap();
+
+    let client = Client::new();
+
+    // 1. Login
+    let login_request = LoginRequest {
+        email: config.username,
+        password: config.password,
+        // ... other fields ...
+    };
+    let login_response: LoginResponse = client
+        .post("https://esketit.com/api/investor/public/login")
+        .json(&login_request)
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    // 2. Supply 2FA token
+    // Assume totp is obtained some other way, e.g., user input
+    let totp = "613023";
+    let two_factor_auth_request = TwoFactorAuthRequest {
+        totp: totp.to_string(),
+    };
+    client
+        .post("https://esketit.com/api/investor/public/confirm-login")
+        .json(&two_factor_auth_request)
+        .send()
+        .await?;
+
+    // 3. Get account information
+    let account_info_request = AccountInfoRequest {
+        currency_code: "EUR".to_string(),
+    };
+    let account_info_response: AccountInfoResponse = client
+        .post("https://esketit.com/api/investor/account-summary")
+        .json(&account_info_request)
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    // 4. Query available investments
+    let query_investments_request = QueryInvestmentsRequest {
+        page: 1,
+        page_size: 20,
+        // filter: Filter {
+        // principal_offer_from: "10".to_string(),
+        // currency_code: "EUR".to_string(),
+        // },
+    };
+    let query_investments_response: QueryInvestmentsResponse = client
+        .post("https://esketit.com/api/investor/public/query-primary-market")
+        .json(&query_investments_request)
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    // 5. Select investment with highest interest rate within criteria
+    let mut highest_interest_rate = config.min_interest_rate;
+    let mut selected_loan = None;
+    for loan in query_investments_response.items {
+        if loan.interest_rate_percent > highest_interest_rate {
+            highest_interest_rate = loan.interest_rate_percent;
+            selected_loan = Some(loan);
+        }
+    }
+
+    if let Some(loan) = selected_loan {
+        // 6. Invest in selected loan
+        let investment_request = InvestmentRequest {
+            loan_id: loan.loan_id,
+            amount: 50.0, // Assume you want to invest €50, or calculate the amount based on your criteria
+        };
+        let investment_response = client
+            .post("https://esketit.com/api/investor/invest")
+            .json(&investment_request)
+            .send()
+            .await?;
+
+        // Check the response to confirm the investment was successful
+        if investment_response.status().is_success() {
+            println!("Investment successful!");
+        } else {
+            eprintln!("Investment failed: {:?}", investment_response.text().await?);
+        }
+    }
+
+    Ok(())
+}

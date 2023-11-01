@@ -1,0 +1,5 @@
+POST https://esketit.com/api/investor/invest
+
+{"loanId":1538361945,"amount":25.51}
+
+{"investmentId":1538486082,"investmentsCount":21}
