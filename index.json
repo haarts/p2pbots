@@ -1,0 +1,13 @@
+GET https://api.peerberry.com/v2/investor/balance/main
+
+Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiIsImp0aSI6Ijc1NjMzYmI3ZjYwZDhkMDdkNzIxNTZhM2YwZGUyYzY4OGI4OGFkN2IifQ.eyJpc3MiOiJodHRwczovL3BlZXJiZXJyeS5jb20iLCJhdWQiOiJodHRwczovL3BlZXJiZXJyeS5jb20iLCJqdGkiOiI3NTYzM2JiN2Y2MGQ4ZDA3ZDcyMTU2YTNmMGRlMmM2ODhiODhhZDdiIiwiaWF0IjoxNjk4MDgyMTkzLjU4NjQ5NywibmJmIjoxNjk4MDgyMTMzLCJleHAiOjE2OTgxMTgxOTMsImludmVzdG9yX2lkIjo4MzA3MywidG9rZW5fcGFpcl9pZCI6IjIzYTc4OGFlLTEyYjQtNDdhNC04ODY2LTE4NDk3YjhmNDZhMCIsInVzZXJfdXVpZCI6IjY1ZjJlMjAyLTY5MTItNDU4NC1hMTczLWQ5MDA2Y2Q5NmIxOCJ9.phmIos2iffG-gZTNJZSU8tMtGBBt_xP2HNgR_6oMWSk
+
+{
+  "currencyIso": "EUR",
+  "availableMoney": "195.87",
+  "invested": "55.73",
+  "totalProfit": "1.60",
+  "totalBalance": "251.60",
+  "balanceGrowth": "0.64",
+  "balanceGrowthAmount": "1.60"
+}

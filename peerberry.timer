@@ -1,0 +1,9 @@
+[Unit]
+Description=Timer for peerberry.service
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=10m # Adjust this for how frequently you want it to run
+
+[Install]
+WantedBy=timers.target

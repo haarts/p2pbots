@@ -1,0 +1,11 @@
+[Unit]
+Description=Rust 2FA
+After=network.target
+
+[Service]
+ExecStart=/home/pi/2fa
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

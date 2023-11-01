@@ -1,0 +1,5 @@
+email = "harm@aarts.email"
+password = "mB!zFT*825%^SGZdTZ5"
+max_loan_term = 100
+min_interest = 9.0
+tfa_url = "http://100.112.251.5/peerberry"

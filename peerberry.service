@@ -1,0 +1,7 @@
+[Unit]
+Description=Execute 2fa
+
+[Service]
+Type=simple
+ExecStart=/home/pi/2fa
+Restart=on-failure
