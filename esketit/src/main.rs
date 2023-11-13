@@ -2,7 +2,9 @@ extern crate reqwest;
 extern crate serde;
 // extern crate serde_derive;
 extern crate toml;
+use std::error::Error;
 
+use anyhow::Result;
 use reqwest::Client;
 // use serde_derive::{Deserialize, Serialize};
 use std::fs;
@@ -24,6 +26,7 @@ struct LoginRequest {
 
 #[derive(serde::Deserialize)]
 struct LoginResponse {
+    #[serde(rename = "investorNumber")]
     investor_number: String,
     // ... other fields ...
 }
@@ -76,12 +79,16 @@ struct InvestmentRequest {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), reqwest::Error> {
+async fn main() -> Result<(), Box<dyn Error>> {
     // Load and parse config
     let config_contents = fs::read_to_string("config.toml").unwrap();
     let config: Config = toml::from_str(&config_contents).unwrap();
 
-    let client = Client::new();
+    let client = reqwest::Client::builder()
+        // Enable cookie store
+        .cookie_store(true)
+        .build()
+        .unwrap();
 
     // 1. Login
     let login_request = LoginRequest {
@@ -89,13 +96,24 @@ async fn main() -> Result<(), reqwest::Error> {
         password: config.password,
         // ... other fields ...
     };
-    let login_response: LoginResponse = client
+    // let login_response: LoginResponse = client
+    let response = client
         .post("https://esketit.com/api/investor/public/login")
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header(reqwest::header::ACCEPT, "application/json")
         .json(&login_request)
         .send()
-        .await?
-        .json()
         .await?;
+    // for cookie in response.cookies() {
+    //     println!("Cookie: {:?}\n", cookie);
+    //     println!("name: {:?}\n", cookie.name());
+    // }
+
+    let bytes = response.bytes().await?;
+    let raw_response = String::from_utf8_lossy(&bytes);
+    println!("{}", raw_response);
+
+    let login_response: LoginResponse = serde_json::from_str(&raw_response)?;
 
     // 2. Supply 2FA token
     // Assume totp is obtained some other way, e.g., user input
@@ -103,7 +121,9 @@ async fn main() -> Result<(), reqwest::Error> {
     let two_factor_auth_request = TwoFactorAuthRequest {
         totp: totp.to_string(),
     };
-    client
+
+    let totp_client = Client::new();
+    totp_client
         .post("https://esketit.com/api/investor/public/confirm-login")
         .json(&two_factor_auth_request)
         .send()
@@ -118,6 +138,7 @@ async fn main() -> Result<(), reqwest::Error> {
         .json(&account_info_request)
         .send()
         .await?
+        // .error_for_status()
         .json()
         .await?;
 
