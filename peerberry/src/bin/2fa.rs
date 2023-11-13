@@ -1,11 +1,12 @@
-extern crate axum;
-extern crate serde_json;
-extern crate totp_rs;
-
 use axum::{http::StatusCode, routing::get, Json, Router};
+use clap::Parser;
 use serde::Serialize;
-use std::net::SocketAddr;
 use totp_rs::TOTP;
+
+#[derive(clap::Parser, Debug)]
+struct Args {
+    host: std::net::SocketAddr,
+}
 
 #[derive(Debug, Serialize)]
 struct TOTPResponse {
@@ -33,6 +34,8 @@ async fn generate_totp(
 
 #[tokio::main]
 async fn main() {
+    let args = Args::parse();
+
     // Build our application with a single route
     let app = Router::new()
         .route(
@@ -51,9 +54,8 @@ async fn main() {
             move || generate_totp(TOTP::from_url(&otpauth_url).unwrap())
         }));
 
-    // Run our app with hyper on localhost:3030
-    let addr = SocketAddr::from(([100, 112, 251, 5], 3030));
-    axum::Server::bind(&addr)
+    println!("Listening on {}", args.host);
+    axum::Server::bind(&args.host)
         .serve(app.into_make_service())
         .await
         .unwrap();
