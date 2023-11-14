@@ -50,8 +50,8 @@ async fn main() {
             "/esketit", 
             get({
             let otpauth_url =
-                "otpauth://totp/Peerberry:harm%40aarts.email?secret=O4SGUC3YX7RHLNT3BCTRQWPTTZXW7NG2&issuer=Peerberry";
-            move || generate_totp(TOTP::from_url(&otpauth_url).unwrap())
+                "otpauth://totp/Esketit: harm@aarts.email?secret=XRREDOFU5AVMRHVW&digits=6";
+            move || generate_totp(TOTP::from_url_unchecked(&otpauth_url).unwrap())
         }));
 
     println!("Listening on {}", args.host);
