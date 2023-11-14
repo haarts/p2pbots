@@ -3,11 +3,12 @@ extern crate serde;
 // extern crate serde_derive;
 extern crate toml;
 use std::error::Error;
+use url::Url;
 
 use anyhow::Result;
-use reqwest::Client;
-// use serde_derive::{Deserialize, Serialize};
 use std::fs;
+
+const BASE_URL: &str = "https://esketit.com/api/investor";
 
 #[derive(serde::Deserialize)]
 struct Config {
@@ -15,6 +16,13 @@ struct Config {
     password: String,
     max_term_period: u32,
     min_interest_rate: f32,
+    #[serde(deserialize_with = "deserialize_url")]
+    tfa_url: url::Url,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
+struct OtpResponse {
+    totp: String,
 }
 
 #[derive(serde::Serialize)]
@@ -31,18 +39,20 @@ struct LoginResponse {
     // ... other fields ...
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Debug)]
 struct TwoFactorAuthRequest {
     totp: String,
 }
 
 #[derive(serde::Serialize)]
 struct AccountInfoRequest {
+    #[serde(rename = "currencyCode")]
     currency_code: String,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Debug)]
 struct AccountInfoResponse {
+    #[serde(rename = "cashBalance")]
     cash_balance: f32,
     // ... other fields ...
 }
@@ -50,32 +60,46 @@ struct AccountInfoResponse {
 #[derive(serde::Serialize)]
 struct QueryInvestmentsRequest {
     page: u32,
+    #[serde(rename = "pageSize")]
     page_size: u32,
-    // filter: Filter,
+    filter: Filter,
 }
 
 #[derive(serde::Serialize)]
 struct Filter {
+    #[serde(rename = "principalOfferFrom")]
     principal_offer_from: String,
+    #[serde(rename = "currencyCode")]
     currency_code: String,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Debug)]
 struct QueryInvestmentsResponse {
     items: Vec<Loan>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Debug)]
 struct Loan {
+    #[serde(rename = "loanId")]
     loan_id: u64,
+    #[serde(rename = "interestRatePercent")]
     interest_rate_percent: f32,
     // ... other fields ...
 }
 
 #[derive(serde::Serialize)]
 struct InvestmentRequest {
+    #[serde(rename = "loanId")]
     loan_id: u64,
-    amount: f32,
+    amount: String,
+}
+
+fn deserialize_url<'de, D>(deserializer: D) -> Result<Url, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = serde::Deserialize::deserialize(deserializer)?;
+    Url::parse(&s).map_err(serde::de::Error::custom)
 }
 
 #[tokio::main]
@@ -84,9 +108,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let config_contents = fs::read_to_string("config.toml").unwrap();
     let config: Config = toml::from_str(&config_contents).unwrap();
 
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        reqwest::header::ACCEPT,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+
+    let jar = std::sync::Arc::new(reqwest::cookie::Jar::default());
     let client = reqwest::Client::builder()
-        // Enable cookie store
-        .cookie_store(true)
+        .cookie_provider(jar.clone())
+        // .cookie_store(true)
+        .default_headers(headers)
         .build()
         .unwrap();
 
@@ -96,68 +132,92 @@ async fn main() -> Result<(), Box<dyn Error>> {
         password: config.password,
         // ... other fields ...
     };
-    // let login_response: LoginResponse = client
     let response = client
-        .post("https://esketit.com/api/investor/public/login")
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header(reqwest::header::ACCEPT, "application/json")
+        .post(format!("{}/public/login", BASE_URL))
         .json(&login_request)
         .send()
         .await?;
-    // for cookie in response.cookies() {
-    //     println!("Cookie: {:?}\n", cookie);
-    //     println!("name: {:?}\n", cookie.name());
-    // }
+
+    let bytes = response.bytes().await?;
+    let raw_response = String::from_utf8_lossy(&bytes);
+
+    let login_response: LoginResponse = serde_json::from_str(&raw_response)?;
+
+    // 2. Supply 2FA token
+    let otp_response: OtpResponse = reqwest::get(config.tfa_url).await?.json().await?;
+    let two_factor_auth_request = TwoFactorAuthRequest {
+        totp: otp_response.totp,
+    };
+
+    client
+        .post(format!("{}/public/confirm-login", BASE_URL))
+        .json(&two_factor_auth_request)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let response = client
+        .get(format!("{}/profile", BASE_URL))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let mut token = String::new();
+    for cookie in response.cookies() {
+        if cookie.name() == "XSRF-TOKEN" {
+            token = cookie.value().to_string();
+        }
+    }
 
     let bytes = response.bytes().await?;
     let raw_response = String::from_utf8_lossy(&bytes);
     println!("{}", raw_response);
 
-    let login_response: LoginResponse = serde_json::from_str(&raw_response)?;
-
-    // 2. Supply 2FA token
-    // Assume totp is obtained some other way, e.g., user input
-    let totp = "613023";
-    let two_factor_auth_request = TwoFactorAuthRequest {
-        totp: totp.to_string(),
-    };
-
-    let totp_client = Client::new();
-    totp_client
-        .post("https://esketit.com/api/investor/public/confirm-login")
-        .json(&two_factor_auth_request)
-        .send()
-        .await?;
-
     // 3. Get account information
     let account_info_request = AccountInfoRequest {
         currency_code: "EUR".to_string(),
     };
+
+    // let serialized = serde_json::to_string(&account_info_request).unwrap();
+    println!("{:?}", jar);
     let account_info_response: AccountInfoResponse = client
-        .post("https://esketit.com/api/investor/account-summary")
+        .post(format!("{}/account-summary", BASE_URL))
+        .header("X-XSRF-TOKEN", token.clone())
         .json(&account_info_request)
         .send()
         .await?
-        // .error_for_status()
+        .error_for_status()?
         .json()
         .await?;
+    println!("{:?}", account_info_response);
 
     // 4. Query available investments
     let query_investments_request = QueryInvestmentsRequest {
         page: 1,
         page_size: 20,
-        // filter: Filter {
-        // principal_offer_from: "10".to_string(),
-        // currency_code: "EUR".to_string(),
-        // },
+        filter: Filter {
+            principal_offer_from: "10".to_string(),
+            currency_code: "EUR".to_string(),
+        },
     };
-    let query_investments_response: QueryInvestmentsResponse = client
-        .post("https://esketit.com/api/investor/public/query-primary-market")
+    let response = client
+        .post(format!("{}/public/query-primary-market", BASE_URL))
         .json(&query_investments_request)
         .send()
-        .await?
-        .json()
         .await?;
+    // .error_for_status()?
+    // .json()
+    // .await?;
+    let cookies = response.cookies();
+    for cookie in cookies {
+        if cookie.name() == "XSRF-TOKEN" {
+            token = cookie.value().to_string();
+        }
+    }
+
+    let bytes = response.bytes().await?;
+    let query_investments_response: QueryInvestmentsResponse = serde_json::from_slice(&bytes)?;
+    println!("{:?}", query_investments_response);
 
     // 5. Select investment with highest interest rate within criteria
     let mut highest_interest_rate = config.min_interest_rate;
@@ -170,13 +230,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if let Some(loan) = selected_loan {
+        println!("{:?}", loan);
         // 6. Invest in selected loan
         let investment_request = InvestmentRequest {
             loan_id: loan.loan_id,
-            amount: 50.0, // Assume you want to invest €50, or calculate the amount based on your criteria
+            amount: "5".to_string(), // Assume you want to invest €50, or calculate the amount based on your criteria
         };
         let investment_response = client
-            .post("https://esketit.com/api/investor/invest")
+            .post(format!("{}/invest", BASE_URL))
+            .header("X-XSRF-TOKEN", token)
             .json(&investment_request)
             .send()
             .await?;
