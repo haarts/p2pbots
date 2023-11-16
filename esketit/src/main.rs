@@ -4,7 +4,7 @@ use std::error::Error;
 use toml;
 use url::Url;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use std::fs;
 
 const BASE_URL: &str = "https://esketit.com/api/investor";
@@ -150,181 +150,247 @@ where
     Url::parse(&s).map_err(serde::de::Error::custom)
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    // Load and parse config
-    let config_contents = fs::read_to_string("config.toml").unwrap();
-    let config: Config = toml::from_str(&config_contents).unwrap();
+struct Client {
+    client: reqwest::Client,
+    xsrf_token: String,
+}
 
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        reqwest::header::CONTENT_TYPE,
-        reqwest::header::HeaderValue::from_static("application/json"),
-    );
-    headers.insert(
-        reqwest::header::ACCEPT,
-        reqwest::header::HeaderValue::from_static("application/json"),
-    );
+struct State {
+    loans: Vec<Loan>,
+    investments: Vec<Investment>,
+    cash_balance: f32,
+}
 
-    let client = reqwest::Client::builder()
-        .cookie_store(true)
-        .default_headers(headers)
-        .build()
-        .unwrap();
-
-    // 1. Login, this sets a bunch of cookies
-    let login_request = LoginRequest {
-        email: config.username,
-        password: config.password,
-    };
-    client
-        .post(format!("{}/public/login", BASE_URL))
-        .json(&login_request)
-        .send()
-        .await?;
-
-    // 2. Supply 2FA token
-    let otp_response: OtpResponse = reqwest::get(config.tfa_url).await?.json().await?;
-    let two_factor_auth_request = TwoFactorAuthRequest {
-        totp: otp_response.totp,
-    };
-
-    client
-        .post(format!("{}/public/confirm-login", BASE_URL))
-        .json(&two_factor_auth_request)
-        .send()
-        .await?
-        .error_for_status()?;
-
-    let response = client
-        .get(format!("{}/profile", BASE_URL))
-        .send()
-        .await?
-        .error_for_status()?;
-
-    let mut token = String::new();
-    for cookie in response.cookies() {
-        if cookie.name() == "XSRF-TOKEN" {
-            token = cookie.value().to_string();
-        }
-    }
-
-    let bytes = response.bytes().await?;
-    let raw_response = String::from_utf8_lossy(&bytes);
-
-    // 3. Get account information
-    let account_info_request = AccountInfoRequest {
-        currency_code: "EUR".to_string(),
-    };
-
-    let account_info_response: AccountInfoResponse = client
-        .post(format!("{}/account-summary", BASE_URL))
-        .header("X-XSRF-TOKEN", token.clone())
-        .json(&account_info_request)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-
-    if account_info_response.cash_balance < 5.0 {
-        println!(
-            "Not enough cash to invest. Currently available: {}",
-            account_info_response.cash_balance
+impl Client {
+    pub fn new() -> anyhow::Result<Client> {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            reqwest::header::HeaderValue::from_static("application/json"),
         );
-        return Ok(());
+        headers.insert(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
+
+        let client = reqwest::Client::builder()
+            .cookie_store(true)
+            .default_headers(headers)
+            .build()?;
+
+        return Ok(Client {
+            client: client,
+            xsrf_token: String::new(),
+        });
     }
 
-    // 4. Query available loans
-    let query_investments_request = QueryLoansRequest {
-        page: 1,
-        page_size: 20,
-        sort_by: "interestRatePercent".to_string(),
-        filter: LoansFilter {
-            principal_offer_from: "5".to_string(),
-            currency_code: "EUR".to_string(),
-        },
-    };
-    let response = client
-        .post(format!("{}/public/query-primary-market", BASE_URL))
-        .json(&query_investments_request)
-        .send()
-        .await?
-        .error_for_status()?;
+    async fn fetch_remote_state(&mut self) -> Result<State> {
+        // Load and parse config
+        let config_contents = fs::read_to_string("config.toml")?;
+        let config: Config = toml::from_str(&config_contents)?;
 
-    let cookies = response.cookies();
-    for cookie in cookies {
-        if cookie.name() == "XSRF-TOKEN" {
-            token = cookie.value().to_string();
-        }
-    }
-
-    let bytes = response.bytes().await?;
-    let query_loans_response: QueryLoansResponse = serde_json::from_slice(&bytes)?;
-
-    // 5. Query available investments
-    let secondary_market_query_investments_request = QueryInvestmentsRequest {
-        page: 1,
-        page_size: 20,
-        sort_by: "smDiscountOrPremiumPercent".to_string(),
-        filter: InvestmentsFilter {
-            currency_code: "EUR".to_string(),
-            sm_discount_or_premium_percent_from: Some("-2.0".to_string()),
-            sm_discount_or_premium_percent_to: Some("-0.5".to_string()),
-        },
-    };
-    println!(
-        "{:?}",
-        serde_json::to_string(&secondary_market_query_investments_request)
-    );
-    let response = client
-        .post(format!("{}/public/query-secondary-market", BASE_URL))
-        .json(&secondary_market_query_investments_request)
-        .send()
-        .await?
-        .error_for_status()?;
-
-    let cookies = response.cookies();
-    for cookie in cookies {
-        if cookie.name() == "XSRF-TOKEN" {
-            token = cookie.value().to_string();
-        }
-    }
-
-    let bytes = response.bytes().await?;
-    let query_investments_response: QueryInvestmentsResponse = serde_json::from_slice(&bytes)?;
-    println!("secondary: {:?}", query_investments_response);
-
-    // 6. Select investment with highest interest rate within criteria
-    let mut highest_interest_rate = config.min_interest_rate;
-    let mut selected_loan = None;
-    for loan in query_loans_response.items {
-        if loan.interest_rate_percent > highest_interest_rate {
-            highest_interest_rate = loan.interest_rate_percent;
-            selected_loan = Some(loan);
-        }
-    }
-
-    if let Some(loan) = selected_loan {
-        // 7. Invest in selected loan
-        let investment_request = InvestmentRequest {
-            loan_id: loan.loan_id,
-            amount: "5".to_string(), // Assume you want to invest €50, or calculate the amount based on your criteria
+        // 1. Login, this sets a bunch of cookies
+        let login_request = LoginRequest {
+            email: config.username,
+            password: config.password,
         };
-        let investment_response = client
+        self.client
+            .post(format!("{}/public/login", BASE_URL))
+            .json(&login_request)
+            .send()
+            .await?;
+
+        // 2. Supply 2FA token
+        let otp_response: OtpResponse = reqwest::get(config.tfa_url).await?.json().await?;
+        let two_factor_auth_request = TwoFactorAuthRequest {
+            totp: otp_response.totp,
+        };
+
+        self.client
+            .post(format!("{}/public/confirm-login", BASE_URL))
+            .json(&two_factor_auth_request)
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let response = self
+            .client
+            .get(format!("{}/profile", BASE_URL))
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let mut token = String::new();
+        for cookie in response.cookies() {
+            if cookie.name() == "XSRF-TOKEN" {
+                token = cookie.value().to_string();
+            }
+        }
+
+        let bytes = response.bytes().await?;
+        let raw_response = String::from_utf8_lossy(&bytes);
+
+        // 3. Get account information
+        let account_info_request = AccountInfoRequest {
+            currency_code: "EUR".to_string(),
+        };
+
+        let account_info_response: AccountInfoResponse = self
+            .client
+            .post(format!("{}/account-summary", BASE_URL))
+            .header("X-XSRF-TOKEN", token.clone())
+            .json(&account_info_request)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        if account_info_response.cash_balance < 5.0 {
+            anyhow!(
+                "Not enough cash to invest. Currently available: {}",
+                account_info_response.cash_balance
+            );
+        }
+
+        // 4. Query available loans
+        let query_investments_request = QueryLoansRequest {
+            page: 1,
+            page_size: 20,
+            sort_by: "interestRatePercent".to_string(),
+            filter: LoansFilter {
+                principal_offer_from: "5".to_string(),
+                currency_code: "EUR".to_string(),
+            },
+        };
+        let response = self
+            .client
+            .post(format!("{}/public/query-primary-market", BASE_URL))
+            .json(&query_investments_request)
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let cookies = response.cookies();
+        for cookie in cookies {
+            if cookie.name() == "XSRF-TOKEN" {
+                self.xsrf_token = cookie.value().to_string();
+            }
+        }
+
+        let bytes = response.bytes().await?;
+        let query_loans_response: QueryLoansResponse = serde_json::from_slice(&bytes)?;
+
+        // 5. Query available investments
+        let secondary_market_query_investments_request = QueryInvestmentsRequest {
+            page: 1,
+            page_size: 20,
+            sort_by: "smDiscountOrPremiumPercent".to_string(),
+            filter: InvestmentsFilter {
+                currency_code: "EUR".to_string(),
+                sm_discount_or_premium_percent_from: Some("-2.0".to_string()),
+                sm_discount_or_premium_percent_to: Some("-0.5".to_string()),
+            },
+        };
+        println!(
+            "{:?}",
+            serde_json::to_string(&secondary_market_query_investments_request)
+        );
+        let response = self
+            .client
+            .post(format!("{}/public/query-secondary-market", BASE_URL))
+            .json(&secondary_market_query_investments_request)
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let cookies = response.cookies();
+        for cookie in cookies {
+            if cookie.name() == "XSRF-TOKEN" {
+                self.xsrf_token = cookie.value().to_string();
+            }
+        }
+
+        let bytes = response.bytes().await?;
+        let query_investments_response: QueryInvestmentsResponse = serde_json::from_slice(&bytes)?;
+        println!("secondary: {:?}", query_investments_response);
+
+        return Ok(State {
+            cash_balance: account_info_response.cash_balance,
+            investments: query_investments_response.items,
+            loans: query_loans_response.items,
+        });
+    }
+
+    async fn invest_loan(&mut self, loan_id: u64) -> Result<()> {
+        let investment_request = InvestmentRequest {
+            loan_id: loan_id,
+            amount: "5".to_string(),
+        };
+        let investment_response = self
+            .client
             .post(format!("{}/invest", BASE_URL))
-            .header("X-XSRF-TOKEN", token)
+            .header("X-XSRF-TOKEN", self.xsrf_token.clone())
             .json(&investment_request)
             .send()
             .await?;
 
-        // Check the response to confirm the investment was successful
         if investment_response.status().is_success() {
-            println!("Investment successful!");
+            Ok(())
         } else {
-            eprintln!("Investment failed: {:?}", investment_response.text().await?);
+            Err(anyhow!(
+                "Loan failed: {:?}",
+                investment_response.text().await?
+            ))
         }
     }
+}
+
+async fn shutdown(
+    shutdown_signal: axum::extract::Extension<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) {
+    shutdown_signal
+        .0
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let mut client = Client::new()?;
+    let state = client.fetch_remote_state();
+
+    let shutdown_signal = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let app = axum::Router::new()
+        .route("/shutdown", axum::routing::post(shutdown))
+        .layer(axum::extract::Extension(shutdown_signal.clone()));
+
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
+    let server = axum::Server::bind(&addr).serve(app.into_make_service());
+
+    let graceful = server.with_graceful_shutdown(async {
+        loop {
+            if shutdown_signal.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            // Check for shutdown signal every 1000ms
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        }
+    });
+
+    graceful.await?;
+    // let mut highest_interest_rate = config.min_interest_rate;
+    // let mut selected_loan = None;
+    // for loan in query_loans_response.items {
+    //     if loan.interest_rate_percent > highest_interest_rate {
+    //         highest_interest_rate = loan.interest_rate_percent;
+    //         selected_loan = Some(loan);
+    //     }
+    // }
+
+    // if let Some(loan) = selected_loan {
+    //     // Check the response to confirm the investment was successful
+    // }
 
     Ok(())
 }
