@@ -1,8 +1,7 @@
-extern crate reqwest;
-extern crate serde;
-// extern crate serde_derive;
-extern crate toml;
+use reqwest;
+use serde;
 use std::error::Error;
+use toml;
 use url::Url;
 
 use anyhow::Result;
@@ -58,15 +57,17 @@ struct AccountInfoResponse {
 }
 
 #[derive(serde::Serialize)]
-struct QueryInvestmentsRequest {
+struct QueryLoansRequest {
     page: u32,
     #[serde(rename = "pageSize")]
     page_size: u32,
-    filter: Filter,
+    filter: LoansFilter,
+    #[serde(rename = "sortBy")]
+    sort_by: String,
 }
 
 #[derive(serde::Serialize)]
-struct Filter {
+struct LoansFilter {
     #[serde(rename = "principalOfferFrom")]
     principal_offer_from: String,
     #[serde(rename = "currencyCode")]
@@ -74,7 +75,7 @@ struct Filter {
 }
 
 #[derive(serde::Deserialize, Debug)]
-struct QueryInvestmentsResponse {
+struct QueryLoansResponse {
     items: Vec<Loan>,
 }
 
@@ -85,6 +86,53 @@ struct Loan {
     #[serde(rename = "interestRatePercent")]
     interest_rate_percent: f32,
     // ... other fields ...
+}
+
+#[derive(serde::Serialize)]
+struct QueryInvestmentsRequest {
+    page: u32,
+    #[serde(rename = "pageSize")]
+    page_size: u32,
+    filter: InvestmentsFilter,
+    #[serde(rename = "sortBy")]
+    sort_by: String,
+}
+
+#[derive(serde::Serialize)]
+struct InvestmentsFilter {
+    #[serde(rename = "currencyCode")]
+    currency_code: String,
+    #[serde(
+        rename = "smDiscountOrPremiumPercentFrom",
+        skip_serializing_if = "Option::is_none"
+    )]
+    sm_discount_or_premium_percent_from: Option<String>,
+    #[serde(
+        rename = "smDiscountOrPremiumPercentTo",
+        skip_serializing_if = "Option::is_none"
+    )]
+    sm_discount_or_premium_percent_to: Option<String>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct QueryInvestmentsResponse {
+    items: Vec<Investment>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct Investment {
+    #[serde(rename = "investmentId")]
+    investment_id: u64,
+    #[serde(rename = "interestRatePercent")]
+    interest_rate_percent: f32,
+    #[serde(rename = "termInDays")]
+    term_in_days: i32,
+    #[serde(rename = "smDiscountOrPremiumPercent")]
+    sm_discount_or_premium_percent: f32,
+    #[serde(rename = "originatorId")]
+    originator_id: u64,
+    #[serde(rename = "smPrice")]
+    sm_price: f32,
 }
 
 #[derive(serde::Serialize)]
@@ -118,30 +166,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
         reqwest::header::HeaderValue::from_static("application/json"),
     );
 
-    let jar = std::sync::Arc::new(reqwest::cookie::Jar::default());
     let client = reqwest::Client::builder()
-        .cookie_provider(jar.clone())
-        // .cookie_store(true)
+        .cookie_store(true)
         .default_headers(headers)
         .build()
         .unwrap();
 
-    // 1. Login
+    // 1. Login, this sets a bunch of cookies
     let login_request = LoginRequest {
         email: config.username,
         password: config.password,
-        // ... other fields ...
     };
-    let response = client
+    client
         .post(format!("{}/public/login", BASE_URL))
         .json(&login_request)
         .send()
         .await?;
-
-    let bytes = response.bytes().await?;
-    let raw_response = String::from_utf8_lossy(&bytes);
-
-    let login_response: LoginResponse = serde_json::from_str(&raw_response)?;
 
     // 2. Supply 2FA token
     let otp_response: OtpResponse = reqwest::get(config.tfa_url).await?.json().await?;
@@ -171,15 +211,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let bytes = response.bytes().await?;
     let raw_response = String::from_utf8_lossy(&bytes);
-    println!("{}", raw_response);
 
     // 3. Get account information
     let account_info_request = AccountInfoRequest {
         currency_code: "EUR".to_string(),
     };
 
-    // let serialized = serde_json::to_string(&account_info_request).unwrap();
-    println!("{:?}", jar);
     let account_info_response: AccountInfoResponse = client
         .post(format!("{}/account-summary", BASE_URL))
         .header("X-XSRF-TOKEN", token.clone())
@@ -189,14 +226,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .error_for_status()?
         .json()
         .await?;
-    println!("{:?}", account_info_response);
 
-    // 4. Query available investments
-    let query_investments_request = QueryInvestmentsRequest {
+    if account_info_response.cash_balance < 5.0 {
+        println!(
+            "Not enough cash to invest. Currently available: {}",
+            account_info_response.cash_balance
+        );
+        return Ok(());
+    }
+
+    // 4. Query available loans
+    let query_investments_request = QueryLoansRequest {
         page: 1,
         page_size: 20,
-        filter: Filter {
-            principal_offer_from: "10".to_string(),
+        sort_by: "interestRatePercent".to_string(),
+        filter: LoansFilter {
+            principal_offer_from: "5".to_string(),
             currency_code: "EUR".to_string(),
         },
     };
@@ -204,10 +249,41 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .post(format!("{}/public/query-primary-market", BASE_URL))
         .json(&query_investments_request)
         .send()
-        .await?;
-    // .error_for_status()?
-    // .json()
-    // .await?;
+        .await?
+        .error_for_status()?;
+
+    let cookies = response.cookies();
+    for cookie in cookies {
+        if cookie.name() == "XSRF-TOKEN" {
+            token = cookie.value().to_string();
+        }
+    }
+
+    let bytes = response.bytes().await?;
+    let query_loans_response: QueryLoansResponse = serde_json::from_slice(&bytes)?;
+
+    // 5. Query available investments
+    let secondary_market_query_investments_request = QueryInvestmentsRequest {
+        page: 1,
+        page_size: 20,
+        sort_by: "smDiscountOrPremiumPercent".to_string(),
+        filter: InvestmentsFilter {
+            currency_code: "EUR".to_string(),
+            sm_discount_or_premium_percent_from: Some("-2.0".to_string()),
+            sm_discount_or_premium_percent_to: Some("-0.5".to_string()),
+        },
+    };
+    println!(
+        "{:?}",
+        serde_json::to_string(&secondary_market_query_investments_request)
+    );
+    let response = client
+        .post(format!("{}/public/query-secondary-market", BASE_URL))
+        .json(&secondary_market_query_investments_request)
+        .send()
+        .await?
+        .error_for_status()?;
+
     let cookies = response.cookies();
     for cookie in cookies {
         if cookie.name() == "XSRF-TOKEN" {
@@ -217,12 +293,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let bytes = response.bytes().await?;
     let query_investments_response: QueryInvestmentsResponse = serde_json::from_slice(&bytes)?;
-    println!("{:?}", query_investments_response);
+    println!("secondary: {:?}", query_investments_response);
 
-    // 5. Select investment with highest interest rate within criteria
+    // 6. Select investment with highest interest rate within criteria
     let mut highest_interest_rate = config.min_interest_rate;
     let mut selected_loan = None;
-    for loan in query_investments_response.items {
+    for loan in query_loans_response.items {
         if loan.interest_rate_percent > highest_interest_rate {
             highest_interest_rate = loan.interest_rate_percent;
             selected_loan = Some(loan);
@@ -230,8 +306,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if let Some(loan) = selected_loan {
-        println!("{:?}", loan);
-        // 6. Invest in selected loan
+        // 7. Invest in selected loan
         let investment_request = InvestmentRequest {
             loan_id: loan.loan_id,
             amount: "5".to_string(), // Assume you want to invest €50, or calculate the amount based on your criteria
