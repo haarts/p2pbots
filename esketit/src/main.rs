@@ -1,10 +1,9 @@
 use reqwest;
 use serde;
-use std::error::Error;
 use toml;
 use url::Url;
 
-use anyhow::{anyhow, Result};
+use anyhow::anyhow;
 use std::fs;
 
 const BASE_URL: &str = "https://esketit.com/api/investor";
@@ -184,7 +183,7 @@ impl Client {
         });
     }
 
-    async fn fetch_remote_state(&mut self) -> Result<State> {
+    async fn fetch_remote_state(&mut self) -> anyhow::Result<State> {
         // Load and parse config
         let config_contents = fs::read_to_string("config.toml")?;
         let config: Config = toml::from_str(&config_contents)?;
@@ -322,10 +321,10 @@ impl Client {
         });
     }
 
-    async fn invest_loan(&mut self, loan_id: u64) -> Result<()> {
+    async fn invest_loan(&mut self, loan_id: u64, amount: f32) -> anyhow::Result<()> {
         let investment_request = InvestmentRequest {
             loan_id: loan_id,
-            amount: "5".to_string(),
+            amount: amount.to_string(),
         };
         let investment_response = self
             .client
@@ -346,6 +345,12 @@ impl Client {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct Accept {
+    id: u64,
+    amount: f32,
+}
+
 async fn shutdown(
     shutdown_signal: axum::extract::Extension<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) {
@@ -354,16 +359,49 @@ async fn shutdown(
         .store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
+#[axum_macros::debug_handler]
+async fn accept_loan(
+    axum::extract::Extension(client): axum::extract::Extension<
+        std::sync::Arc<tokio::sync::Mutex<Client>>,
+    >,
+    axum::extract::Json(payload): axum::extract::Json<Accept>,
+) -> Result<impl axum::response::IntoResponse, impl axum::response::IntoResponse> {
+    let mut client = client.lock().await;
+    client
+        .invest_loan(payload.id, payload.amount)
+        .await
+        .map(|_| (axum::http::StatusCode::OK, "Loan accepted".to_string()))
+        .map_err(|e| {
+            let error_message = format!("Internal server error: {}", e);
+            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, error_message)
+        })
+}
+
+async fn accept_investment() {}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = Client::new()?;
-    let state = client.fetch_remote_state();
+    let state = client.fetch_remote_state().await?;
+    // TODO push the state somewhere
+
+    let shared_client = std::sync::Arc::new(tokio::sync::Mutex::new(client));
 
     let shutdown_signal = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let app = axum::Router::new()
-        .route("/shutdown", axum::routing::post(shutdown))
-        .layer(axum::extract::Extension(shutdown_signal.clone()));
+        .route(
+            "/shutdown",
+            axum::routing::post(shutdown).layer(axum::extract::Extension(shutdown_signal.clone())),
+        )
+        .route(
+            "/loans",
+            axum::routing::post(accept_loan).layer(axum::extract::Extension(shared_client.clone())),
+        )
+        .route(
+            "/investment",
+            axum::routing::post(accept_investment).layer(axum::extract::Extension(shared_client)),
+        );
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
     let server = axum::Server::bind(&addr).serve(app.into_make_service());
