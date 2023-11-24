@@ -2,3 +2,4 @@
 /peerberry/target
 /esketit/target
 *.csv
+*.json

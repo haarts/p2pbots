@@ -1,7 +1,0 @@
-POST https://esketit.com/api/investor/public/confirm-login
-
-request:
-{"totp":"613023"}
-
-response:
-set-cookie: auth_inv_token=1524592221:Irev_pVZWEYDrpXN51bh7aCDFGqBgDaj; Max-Age=86399; Expires=Fri, 27-Oct-2023 18:00:18 GMT; Path=/; HttpOnly
