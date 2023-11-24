@@ -6,6 +6,8 @@ use totp_rs::TOTP;
 #[derive(clap::Parser, Debug)]
 struct Args {
     host: std::net::SocketAddr,
+    esketit: String,
+    peerberry: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -36,23 +38,30 @@ async fn generate_totp(
 async fn main() {
     let args = Args::parse();
 
-    // Build our application with a single route
+    let esketit = totp_rs::TOTP::new_unchecked(
+        totp_rs::Algorithm::SHA1,
+        6,
+        1,
+        30,
+        totp_rs::Secret::Encoded(args.esketit).to_bytes().unwrap(),
+        None,
+        "".to_string(),
+    );
+
+    let peerberry = totp_rs::TOTP::new(
+        totp_rs::Algorithm::SHA1,
+        6,
+        1,
+        30,
+        totp_rs::Secret::Encoded(args.peerberry).to_bytes().unwrap(),
+        None,
+        "".to_string(),
+    )
+    .unwrap();
+
     let app = Router::new()
-        .route(
-            "/peerberry", 
-            get({
-            let otpauth_url =
-                "otpauth://totp/Peerberry:harm%40aarts.email?secret=O4SGUC3YX7RHLNT3BCTRQWPTTZXW7NG2&issuer=Peerberry";
-            move || generate_totp(TOTP::from_url(&otpauth_url).unwrap())
-        }),
-        )
-        .route(
-            "/esketit", 
-            get({
-            let otpauth_url =
-                "otpauth://totp/Esketit: harm@aarts.email?secret=XRREDOFU5AVMRHVW&digits=6";
-            move || generate_totp(TOTP::from_url_unchecked(&otpauth_url).unwrap())
-        }));
+        .route("/peerberry", get(move || generate_totp(peerberry)))
+        .route("/esketit", get(move || generate_totp(esketit)));
 
     println!("Listening on {}", args.host);
     axum::Server::bind(&args.host)
