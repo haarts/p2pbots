@@ -1,5 +1,5 @@
-username = "harm@aarts.email"
-password = "n@TLxvN!xRTw*NqheR3#^i&3mj*dXnRde"
+username = "your@email.com"
+password = "your password"
 min_interest_rate = 9
 max_term_period = 100
 tfa_url = "http://100.112.251.5:3030/esketit"
