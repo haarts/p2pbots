@@ -1,5 +1,6 @@
 /target
 /peerberry/target
 /esketit/target
+/tfa/target
 *.csv
 *.json
