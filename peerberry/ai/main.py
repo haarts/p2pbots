@@ -7,6 +7,7 @@ def main():
     parser.add_argument('--cash', type=float, help='Cash available to invest', required=True)
     parser.add_argument('--prefix', type=str, help='The prefix of the to be read CSV files', required=True)
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output')
+    parser.add_argument('--apikey', type=str, help='The OpenAI API key')
 
     args = parser.parse_args()
 
@@ -65,10 +66,9 @@ def main():
     if args.verbose:
         print(f"This is the entire prompt:\n\n {content}")
 
-    key = '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'
     # GPT_MODEL = 'gpt-3.5-turbo-1106'
     GPT_MODEL = 'gpt-4-1106-preview'
-    client = OpenAI(api_key=key)
+    client = OpenAI(api_key=args.apikey)
     completion =  client.chat.completions.create(
         model=GPT_MODEL,
         messages=[
