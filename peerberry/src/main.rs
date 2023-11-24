@@ -309,11 +309,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?;
     info!("Available loans: {}", loans.data.len());
 
-    let state = std::sync::Arc::new(State {
-        available_money: account_info.available_money,
-        loans: loans.data,
-    });
-
     // 3. Select loans to invest
     let desirable_loans =
         filter_desirable_loans(loans.data, config.max_loan_term, config.min_interest);
