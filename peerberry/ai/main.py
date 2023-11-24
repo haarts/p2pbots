@@ -41,17 +41,17 @@ def main():
         {instructions}
 
         This is the portfolio you are currently managing. It is a CSV file:
-    
+
         {portfolio}
 
         You have a maximum of {args.cash} EUR to invest.
-    
+
         These loans are available on the market (also CSV):
-    
+
         {market}
-    
+
         These alternative investments are available on the secondary market (also CSV):
-    
+
         {secondary_market}
 
         Tell me which loans you would invest given the current portfolio.
@@ -59,7 +59,7 @@ def main():
         investments are allowed. Don't exceed the amount of money
         available ({args.cash} EUR) for investment!
 
-        For each selected loan please give a short summary of the most 
+        For each selected loan please give a short summary of the most
         relevant aspects of the loan.
         """
 
