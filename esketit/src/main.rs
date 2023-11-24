@@ -27,14 +27,12 @@ struct OtpResponse {
 struct LoginRequest {
     email: String,
     password: String,
-    // ... other fields ...
 }
 
 #[derive(serde::Deserialize)]
 struct LoginResponse {
     #[serde(rename = "investorNumber")]
     investor_number: String,
-    // ... other fields ...
 }
 
 #[derive(serde::Serialize, Debug)]
@@ -165,17 +163,62 @@ struct QueryLoansResponse {
 #[derive(serde::Deserialize, serde::Serialize, Debug)]
 struct Loan {
     #[serde(rename = "loanId")]
-    loan_id: u64,
+    loan_id: i64,
+    #[serde(rename = "issueDate")]
+    issue_date: String,
     #[serde(rename = "interestRatePercent")]
     interest_rate_percent: f32,
+    #[serde(rename = "principalIssued")]
+    principal_issued: f64,
     #[serde(rename = "principalOffer")]
-    principal_offer: f32,
+    principal_offer: f64,
+    #[serde(rename = "principalOutstanding")]
+    principal_outstanding: f64,
+    #[serde(rename = "currencyCode")]
+    currency_code: String,
+    #[serde(rename = "currencySymbol")]
+    currency_symbol: String,
+    #[serde(rename = "totalPayments")]
+    total_payments: i32,
+    #[serde(rename = "openPayments")]
+    open_payments: i32,
+    #[serde(rename = "closedPayments")]
+    closed_payments: i32,
+    #[serde(rename = "maturityDate")]
+    maturity_date: String,
+    #[serde(rename = "nextPaymentDate")]
+    next_payment_date: String,
     #[serde(rename = "termInDays")]
     term_in_days: i32,
+    #[serde(rename = "originatorCompanyName")]
+    originator_company_name: String,
     #[serde(rename = "originatorId")]
-    originator_id: u64,
+    originator_id: i64,
+    #[serde(rename = "productCode")]
+    product_code: String,
+    #[serde(rename = "productLabel")]
+    product_label: String,
     #[serde(rename = "countryCode")]
     country_code: String,
+    #[serde(rename = "hasBuyback")]
+    has_buyback: bool,
+    extensions: i32,
+    #[serde(rename = "extendedForDays")]
+    extended_for_days: i32,
+    #[serde(rename = "myInvestments")]
+    my_investments: f64,
+    #[serde(rename = "myInvestmentsPercent")]
+    my_investments_percent: f64,
+    #[serde(rename = "fundedPercent")]
+    funded_percent: i32,
+    #[serde(rename = "amountFunded")]
+    amount_funded: f64,
+    #[serde(rename = "amountAvailable")]
+    amount_available: f64,
+    #[serde(rename = "availablePercent")]
+    available_percent: i32,
+    #[serde(rename = "loanStatus")]
+    loan_status: String,
 }
 
 #[derive(serde::Serialize)]
@@ -212,17 +255,47 @@ struct QueryInvestmentsResponse {
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 struct Investment {
     #[serde(rename = "investmentId")]
-    investment_id: u64,
+    investment_id: i64,
+    #[serde(rename = "loanId")]
+    loan_id: i64,
+    #[serde(rename = "issueDate")]
+    issue_date: String,
     #[serde(rename = "interestRatePercent")]
     interest_rate_percent: f32,
+    #[serde(rename = "currencyCode")]
+    currency_code: String,
+    #[serde(rename = "currencySymbol")]
+    currency_symbol: String,
+    #[serde(rename = "totalPayments")]
+    total_payments: i32,
+    #[serde(rename = "openPayments")]
+    open_payments: i32,
+    #[serde(rename = "closedPayments")]
+    closed_payments: i32,
+    #[serde(rename = "maturityDate")]
+    maturity_date: String,
+    #[serde(rename = "nextPaymentDate")]
+    next_payment_date: String,
     #[serde(rename = "termInDays")]
     term_in_days: i32,
-    #[serde(rename = "smDiscountOrPremiumPercent")]
-    sm_discount_or_premium_percent: f32,
+    #[serde(rename = "originatorCompanyName")]
+    originator_company_name: String,
     #[serde(rename = "originatorId")]
-    originator_id: u64,
+    originator_id: i64,
+    #[serde(rename = "productCode")]
+    product_code: String,
+    #[serde(rename = "productLabel")]
+    product_label: String,
+    #[serde(rename = "countryCode")]
+    country_code: String,
+    #[serde(rename = "collectionStatus")]
+    collection_status: String,
+    #[serde(rename = "smOfferPrincipalAvailable")]
+    sm_offer_principal_available: f64,
+    #[serde(rename = "smDiscountOrPremiumPercent")]
+    sm_discount_or_premium_percent: f64,
     #[serde(rename = "smPrice")]
-    sm_price: f32,
+    sm_price: f64,
 }
 
 #[derive(serde::Serialize)]
@@ -342,6 +415,7 @@ impl Client {
                 account_info_response.cash_balance
             ));
         }
+        println!("Enough money to invest. Continuing...");
 
         // 4. Query available loans
         let query_investments_request = QueryLoansRequest {
@@ -370,6 +444,11 @@ impl Client {
 
         let bytes = response.bytes().await?;
         let query_loans_response: QueryLoansResponse = serde_json::from_slice(&bytes)?;
+
+        println!(
+            "Found {} available loans on primary market",
+            query_loans_response.items.len()
+        );
 
         // 5. Query available investments
         let secondary_market_query_investments_request = QueryInvestmentsRequest {
@@ -400,6 +479,11 @@ impl Client {
         let bytes = response.bytes().await?;
         let query_investments_response: QueryInvestmentsResponse = serde_json::from_slice(&bytes)?;
 
+        println!(
+            "Found {} available loans on secondary market",
+            query_investments_response.items.len()
+        );
+
         //6. Query portfolio
         let response = self
             .client
@@ -428,6 +512,11 @@ impl Client {
         let bytes = response.bytes().await?;
         let portfolio: PortfolioResponse = serde_json::from_slice(&bytes)?;
 
+        println!(
+            "Current portfolio contains {} investments",
+            query_investments_response.items.len()
+        );
+
         return Ok(State {
             cash_balance: account_info_response.cash_balance,
             portfolio: portfolio.items,
@@ -438,7 +527,7 @@ impl Client {
 
     async fn invest_loan(&mut self, loan_id: u64, amount: f32) -> anyhow::Result<()> {
         let investment_request = InvestmentRequest {
-            loan_id: loan_id,
+            loan_id,
             amount: amount.to_string(),
         };
         let investment_response = self
